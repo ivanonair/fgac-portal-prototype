@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Data Access Portal（原型）</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--bd:#e3e6ea;--tx:#1c2430;--mu:#6b7480;--ac:#2f6fed;--ok:#1f9d55;--wa:#c27c0e;--da:#d64545}
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,"Noto Sans TC","PingFang TC",sans-serif;background:var(--bg);color:var(--tx)}
+header{background:#111a2b;color:#fff;padding:14px 24px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+header b{font-size:18px}.demo{background:#f3c64b;color:#111;padding:2px 8px;border-radius:4px;font-size:12px}
+nav{display:flex;gap:4px;padding:0 24px;background:#fff;border-bottom:1px solid var(--bd);flex-wrap:wrap}
+nav button{border:0;background:none;padding:14px 16px;font-size:15px;cursor:pointer;color:var(--mu);border-bottom:3px solid transparent}
+nav button.on{color:var(--ac);border-color:var(--ac);font-weight:600}
+main{max-width:1180px;margin:20px auto;padding:0 16px}.tab{display:none}.tab.on{display:block}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:18px;margin-bottom:16px}
+h2{font-size:17px;margin:0 0 12px}h3{font-size:15px;margin:14px 0 8px}
+label{display:block;font-size:13px;color:var(--mu);margin:10px 0 4px}
+select,input,textarea{width:100%;padding:8px;border:1px solid var(--bd);border-radius:6px;font:inherit}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}@media(max-width:800px){.grid{grid-template-columns:1fr}}
+table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;padding:8px;border-bottom:1px solid var(--bd);vertical-align:top}th{color:var(--mu);font-weight:500;background:#fafbfc}
+.btn{border:1px solid var(--bd);background:#fff;padding:8px 14px;border-radius:6px;cursor:pointer;font:inherit}
+.btn.p{background:var(--ac);color:#fff;border-color:var(--ac)}.btn.ok{background:var(--ok);color:#fff;border-color:var(--ok)}.btn.da{color:var(--da);border-color:var(--da)}
+.pill{display:inline-block;padding:2px 8px;border-radius:99px;font-size:12px;background:#eef1f5}
+.pill.ok{background:#e3f5ea;color:var(--ok)}.pill.wa{background:#fdf1dc;color:var(--wa)}.pill.da{background:#fde7e7;color:var(--da)}.pill.ac{background:#e6eefd;color:var(--ac)}
+pre{background:#0f1726;color:#d7e3ff;padding:14px;border-radius:8px;overflow:auto;font-size:12.5px;max-height:480px}
+.muted{color:var(--mu);font-size:13px}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.cols label{display:flex;gap:6px;align-items:center;color:var(--tx);margin:4px 0}.cols input{width:auto}
+.plain{background:#f2f7ff;border-left:4px solid var(--ac);padding:10px 14px;border-radius:6px;margin:6px 0;font-size:14px}
+</style></head><body>
+<header><b>🔐 Business Data Platform · 權限控制入口</b><span class="demo">原型 · 所有資料皆為範例</span><span class="muted" style="color:#9fb0cc">Trino + OPA · 來源：A4 2.0 / Windows AD / DataHub</span></header>
+<nav id="nav"><button data-t="apply" class="on">① 申請權限</button><button data-t="approve">② Data Owner 簽核</button><button data-t="lookup">③ 權限查詢</button><button data-t="policy">④ Policy 預覽</button></nav>
+<main>
+<section id="apply" class="tab on"><div class="grid">
+<div class="card"><h2>申請資料存取權限</h2>
+<label>申請人（範例：已由 AD SSO 帶入）</label><input id="aUser" value="chen.wl (陳文玲) · 組織 FIN-TW-AP">
+<label>資料表（來源：DataHub）</label><select id="aTbl"></select>
+<div id="tblInfo" class="muted" style="margin-top:6px"></div>
+<label>需要的欄位（🔒 為敏感欄位，預設遮罩）</label><div id="aCols" class="cols"></div>
+<label>資料範圍（Row 條件）</label><div id="aRows"></div>
+<label>有效期限</label><select id="aExp"><option>90 天</option><option>180 天</option><option>1 年</option></select>
+<label>申請理由</label><textarea id="aWhy" rows="2">月結對帳需檢視台灣廠區應付帳款明細</textarea>
+<div class="row" style="margin-top:12px"><button class="btn p" onclick="submitReq()">送出申請</button><span id="aMsg" class="muted"></span></div></div>
+<div class="card"><h2>我的申請紀錄</h2><table id="myReq"></table></div></div></section>
+
+<section id="approve" class="tab"><div class="card"><h2>待我簽核（Data Owner：wang.jh 王建宏 · 財務資料）</h2><p class="muted">Owner 可逐欄、逐條件調整授權範圍後核准。未來可串接公司電子簽核系統。</p><div id="pending"></div></div></section>
+
+<section id="lookup" class="tab"><div class="card"><h2>查詢有效權限</h2>
+<div class="row"><input id="lUser" style="max-width:280px" value="chen.wl" onkeydown="if(event.key==='Enter')lookup()"><button class="btn p" onclick="lookup()">查詢</button><span class="muted">範例帳號：chen.wl、lin.yc、huang.sm</span></div></div>
+<div id="lOut"></div></section>
+
+<section id="policy" class="tab"><div class="grid">
+<div class="card"><h2>產生的 OPA data bundle（data.json）</h2><p class="muted">由 Portal DB 自動產生，取代手寫 YAML；OPA 以 bundle 方式拉取。</p><pre id="pData"></pre></div>
+<div class="card"><h2>通用 Rego 規則（不隨申請變動）</h2><pre id="pRego"></pre></div></div></section>
+</main>
+<script>
+const TABLES={
+ "lakehouse.sap_fi.ap_invoice":{owner:"wang.jh 王建宏",domain:"財務",stack:"Delta Lake on MinIO",
+  cols:[["invoice_no",0],["vendor_id",0],["vendor_name",0],["company_code",0],["plant",0],["amount",1],["bank_account",1],["posting_date",0]],
+  rows:{company_code:["TW01","TW02","SG01","US01"],plant:["F12","F14","F15","F18"]}},
+ "warehouse.scm.purchase_order":{owner:"wang.jh 王建宏",domain:"採購",stack:"ClickHouse",
+  cols:[["po_no",0],["vendor_id",0],["material",0],["qty",0],["unit_price",1],["buyer",0],["org_code",0]],
+  rows:{org_code:["PUR-TW","PUR-SG","PUR-US"]}},
+ "mart.crm.customer":{owner:"wu.ph 吳佩華",domain:"客戶",stack:"MariaDB",
+  cols:[["customer_id",0],["customer_name",0],["region",0],["contact_email",1],["credit_limit",1],["tax_id",1]],
+  rows:{region:["APAC","NA","EU"]}}};
+const ROLES={ // A4 2.0 + AD 範例
+ "chen.wl":{name:"陳文玲",org:"FIN-TW-AP",a4:["FIN_ANALYST"],ad:["OU=FIN,OU=TW"]},
+ "lin.yc":{name:"林逸成",org:"PUR-SG",a4:["BUYER"],ad:["OU=PUR,OU=SG"]},
+ "huang.sm":{name:"黃書敏",org:"SALES-NA",a4:["SALES_OPS","CROSS_BU_PMO"],ad:["OU=SALES,OU=US"]}};
+let REQ=[
+ {id:"REQ-1042",user:"lin.yc",tbl:"warehouse.scm.purchase_order",cols:["po_no","vendor_id","material","qty","unit_price"],rows:{org_code:["PUR-SG"]},exp:"180 天",why:"新加坡廠採購成本分析",st:"待簽核"},
+ {id:"REQ-1039",user:"chen.wl",tbl:"lakehouse.sap_fi.ap_invoice",cols:["invoice_no","vendor_name","company_code","amount","posting_date"],rows:{company_code:["TW01"],plant:["F12","F14"]},exp:"90 天",why:"F12/F14 月結",st:"已核准",unmask:["amount"],until:"2027-01-18"},
+ {id:"REQ-1035",user:"huang.sm",tbl:"mart.crm.customer",cols:["customer_id","customer_name","region","credit_limit"],rows:{region:["NA"]},exp:"1 年",why:"北美客戶信用額度檢視",st:"已核准",unmask:[],until:"2027-09-30"},
+ {id:"REQ-1031",user:"huang.sm",tbl:"lakehouse.sap_fi.ap_invoice",cols:["invoice_no","amount"],rows:{company_code:["US01"]},exp:"90 天",why:"跨 BU 專案",st:"已退回",note:"請改走 PMO 報表"}];
+let seq=1043;
+const $=s=>document.querySelector(s);
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{document.querySelectorAll('nav button,.tab').forEach(e=>e.classList.remove('on'));b.classList.add('on');$('#'+b.dataset.t).classList.add('on');render()});
+const st=s=>`<span class="pill ${s=='已核准'?'ok':s=='待簽核'?'wa':'da'}">${s}</span>`;
+function initApply(){const s=$('#aTbl');s.innerHTML=Object.keys(TABLES).map(t=>`<option>${t}</option>`).join('');s.onchange=drawTbl;drawTbl()}
+function drawTbl(){const t=TABLES[$('#aTbl').value];$('#tblInfo').innerHTML=`Owner：${t.owner} · 領域：${t.domain} · 實體位置：${t.stack}`;
+ $('#aCols').innerHTML=t.cols.map(([c,s])=>`<label><input type="checkbox" value="${c}" checked> ${s?'🔒 ':''}${c}</label>`).join('');
+ $('#aRows').innerHTML=Object.entries(t.rows).map(([k,v])=>`<div class="muted" style="margin-top:4px">${k}</div><div class="cols row">${v.map(x=>`<label><input type="checkbox" data-k="${k}" value="${x}"> ${x}</label>`).join('')}</div>`).join('')}
+function submitReq(){const tbl=$('#aTbl').value,cols=[...document.querySelectorAll('#aCols input:checked')].map(i=>i.value),rows={};
+ document.querySelectorAll('#aRows input:checked').forEach(i=>(rows[i.dataset.k]=rows[i.dataset.k]||[]).push(i.value));
+ if(!Object.keys(rows).length){$('#aMsg').textContent='⚠ 請至少選一個資料範圍';return}
+ REQ.unshift({id:'REQ-'+(seq++),user:'chen.wl',tbl,cols,rows,exp:$('#aExp').value,why:$('#aWhy').value,st:'待簽核'});$('#aMsg').textContent='✅ 已送出，等待 Data Owner 簽核';render()}
+const rowTxt=r=>Object.entries(r).map(([k,v])=>`${k} ∈ {${v.join(', ')}}`).join(' 且 ');
+function render(){
+ $('#myReq').innerHTML='<tr><th>單號</th><th>資料表</th><th>範圍</th><th>狀態</th></tr>'+REQ.filter(r=>r.user=='chen.wl').map(r=>`<tr><td>${r.id}</td><td>${r.tbl}</td><td class="muted">${rowTxt(r.rows)}</td><td>${st(r.st)}</td></tr>`).join('');
+ const p=REQ.filter(r=>r.st=='待簽核');
+ $('#pending').innerHTML=p.length?p.map(r=>{const t=TABLES[r.tbl],u=ROLES[r.user]||{name:'',org:'',a4:[]};return `<div class="card" style="background:#fcfcfd"><div class="row" style="justify-content:space-between"><b>${r.id} · ${r.tbl}</b>${st(r.st)}</div>
+ <p class="muted">申請人 ${r.user} ${u.name} · 組織 ${u.org} · A4 角色 ${u.a4.join(', ')} · 期限 ${r.exp}<br>理由：${r.why}</p>
+ <table><tr><th>欄位</th><th>授權</th><th>顯示方式</th></tr>${t.cols.map(([c,s])=>`<tr><td>${s?'🔒 ':''}${c}</td><td><input type="checkbox" id="g_${r.id}_${c}" ${r.cols.includes(c)?'checked':''}></td><td>${s?`<select id="m_${r.id}_${c}"><option value="mask">遮罩</option><option value="clear">明碼</option></select>`:'<span class="muted">明碼</span>'}</td></tr>`).join('')}</table>
+ <h3>資料範圍（可縮小）</h3>${Object.entries(t.rows).map(([k,v])=>`<div class="row"><span class="muted" style="width:110px">${k}</span>${v.map(x=>`<label class="cols"><input type="checkbox" id="r_${r.id}_${k}_${x}" ${(r.rows[k]||[]).includes(x)?'checked':''}> ${x}</label>`).join('')}</div>`).join('')}
+ <div class="row" style="margin-top:12px"><button class="btn ok" onclick="decide('${r.id}',1)">核准</button><button class="btn da" onclick="decide('${r.id}',0)">退回</button><span class="muted">核准後約 1 分鐘內發佈到 OPA bundle</span></div></div>`}).join(''):'<p class="muted">目前沒有待簽核的申請 🎉</p>';
+ $('#pData').textContent=JSON.stringify(bundle(),null,2);}
+function decide(id,ok){const r=REQ.find(x=>x.id==id),t=TABLES[r.tbl];if(!ok){r.st='已退回';render();return}
+ r.cols=t.cols.map(c=>c[0]).filter(c=>$(`#g_${id}_${c}`).checked);r.unmask=t.cols.filter(c=>c[1]&&r.cols.includes(c[0])&&$(`#m_${id}_${c[0]}`).value=='clear').map(c=>c[0]);
+ const rows={};Object.entries(t.rows).forEach(([k,v])=>{const s=v.filter(x=>$(`#r_${id}_${k}_${x}`).checked);if(s.length)rows[k]=s});r.rows=rows;
+ const d=new Date();d.setDate(d.getDate()+parseInt(r.exp=='1 年'?365:r.exp));r.until=d.toISOString().slice(0,10);r.st='已核准';render()}
+function bundle(){const g={};REQ.filter(r=>r.st=='已核准').forEach(r=>{const t=TABLES[r.tbl];(g[r.user]=g[r.user]||[]).push({table:r.tbl,columns:r.cols,
+ masked_columns:t.cols.filter(c=>c[1]&&r.cols.includes(c[0])&&!r.unmask.includes(c[0])).map(c=>c[0]),row_filter:r.rows,expires_at:r.until,grant_id:r.id})});
+ return {"_comment":"範例資料，由 Portal 產生","grants_by_user":g,"org_rules":{"FIN-TW-*":{"table":"lakehouse.sap_fi.ap_invoice","row_filter":{"company_code":["TW01","TW02"]}}},
+ "mask_expr":{"amount":"CAST(NULL AS DECIMAL(18,2))","bank_account":"'****' || substr(bank_account,-4)","contact_email":"regexp_replace(contact_email,'^[^@]+','***')","credit_limit":"NULL","tax_id":"'********'","unit_price":"NULL"}}}
+function lookup(){const id=$('#lUser').value.trim(),u=ROLES[id];if(!u){$('#lOut').innerHTML='<div class="card">查無此帳號（範例僅含 chen.wl / lin.yc / huang.sm）</div>';return}
+ const gs=REQ.filter(r=>r.user==id&&r.st=='已核准');
+ $('#lOut').innerHTML=`<div class="card"><h2>${id} ${u.name}</h2><div class="row"><span class="pill ac">組織 ${u.org}</span>${u.a4.map(a=>`<span class="pill">A4：${a}</span>`).join('')}${u.ad.map(a=>`<span class="pill">AD：${a}</span>`).join('')}</div></div>`+
+ (gs.length?gs.map(r=>{const t=TABLES[r.tbl],mk=t.cols.filter(c=>c[1]&&r.cols.includes(c[0])&&!r.unmask.includes(c[0])).map(c=>c[0]);return `<div class="card"><div class="row" style="justify-content:space-between"><b>${r.tbl}</b><span class="muted">${r.id} · 有效至 ${r.until}</span></div>
+ <div class="plain">你可以查詢 <b>${r.tbl.split('.').pop()}</b>，但只會看到 <b>${Object.entries(r.rows).map(([k,v])=>`${k} 為 ${v.join('、')}`).join('，且 ')}</b> 的資料。${mk.length?` 欄位 <b>${mk.join('、')}</b> 會被遮罩。`:''}</div>
+ <table><tr><th>欄位</th><th>狀態</th></tr>${t.cols.map(([c])=>`<tr><td>${c}</td><td>${!r.cols.includes(c)?'<span class="pill da">無權限</span>':mk.includes(c)?'<span class="pill wa">遮罩</span>':'<span class="pill ok">可見</span>'}</td></tr>`).join('')}</table></div>`}).join(''):'<div class="card muted">目前沒有已核准的權限。</div>')}
+$('#pRego').textContent=`package trino
+
+import rego.v1
+default allow := false
+
+grant(user, tbl) := g if {
+  some g in data.grants_by_user[user]
+  g.table == tbl
+  time.parse_ns("2006-01-02", g.expires_at) > time.now_ns()
+}
+
+fqn(r) := concat(".", [r.catalogName, r.schemaName, r.tableName])
+
+allow if {
+  input.action.operation == "SelectFromColumns"
+  t := input.action.resource.table
+  g := grant(input.context.identity.user, fqn(t))
+  every c in t.columns { c in g.columns }
+}
+
+# opa.policy.row-filters-uri → 回傳陣列 [{"expression": "..."}]
+rowFilters contains {"expression": expr} if {
+  t := input.action.resource.table
+  g := grant(input.context.identity.user, fqn(t))
+  conds := [sprintf("%s IN (%s)", [k, concat(",", [sprintf("'%s'", [v]) | some v in vs])]) |
+            some k, vs in g.row_filter]
+  expr := concat(" AND ", conds)
+}
+
+# opa.policy.batch-column-masking-uri → [{"index": i, "viewExpression": {...}}]
+batchColumnMasks contains {"index": i, "viewExpression": {"expression": data.mask_expr[c.column.columnName]}} if {
+  some i, c in input.action.filterResources
+  g := grant(input.context.identity.user,
+             concat(".", [c.column.catalogName, c.column.schemaName, c.column.tableName]))
+  c.column.columnName in g.masked_columns
+}`;
+initApply();render();lookup();
+</script></body></html>
