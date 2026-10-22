@@ -43,7 +43,7 @@ pre{background:#0f1726;color:#d7e3ff;padding:14px;border-radius:8px;overflow:aut
 <section id="approve" class="tab"><div class="card"><h2>待我簽核（Data Owner：wang.jh 王建宏 · 財務資料）</h2><p class="muted">Owner 可逐欄、逐條件調整授權範圍後核准。未來可串接公司電子簽核系統。</p><div id="pending"></div></div></section>
 
 <section id="lookup" class="tab"><div class="card"><h2>查詢有效權限</h2>
-<div class="row"><input id="lUser" style="max-width:280px" value="chen.wl" onkeydown="if(event.key==='Enter')lookup()"><button class="btn p" onclick="lookup()">查詢</button><span class="muted">範例帳號：chen.wl、lin.yc、huang.sm</span></div></div>
+<div class="row"><input id="lUser" style="max-width:280px" value="thlin" placeholder="thlin" onkeydown="if(event.key==='Enter')lookup()"><button class="btn p" onclick="lookup()">查詢</button><span class="muted">範例帳號：thlin、chen.wl、lin.yc、huang.sm</span></div></div>
 <div id="lOut"></div></section>
 
 <section id="policy" class="tab"><div class="grid">
@@ -62,6 +62,7 @@ const TABLES={
   cols:[["customer_id",0],["customer_name",0],["region",0],["contact_email",1],["credit_limit",1],["tax_id",1]],
   rows:{region:["APAC","NA","EU"]}}};
 const ROLES={ // A4 2.0 + AD 範例
+ "thlin":{name:"林子翔（範例）",org:"00123456",a4:["IT-DataPlatform"],ad:["00123456"]},
  "chen.wl":{name:"陳文玲",org:"FIN-TW-AP",a4:["FIN_ANALYST"],ad:["OU=FIN,OU=TW"]},
  "lin.yc":{name:"林逸成",org:"PUR-SG",a4:["BUYER"],ad:["OU=PUR,OU=SG"]},
  "huang.sm":{name:"黃書敏",org:"SALES-NA",a4:["SALES_OPS","CROSS_BU_PMO"],ad:["OU=SALES,OU=US"]}};
@@ -71,6 +72,22 @@ let REQ=[
  {id:"REQ-1035",user:"huang.sm",tbl:"mart.crm.customer",cols:["customer_id","customer_name","region","credit_limit"],rows:{region:["NA"]},exp:"1 年",why:"北美客戶信用額度檢視",st:"已核准",unmask:[],until:"2027-09-30"},
  {id:"REQ-1031",user:"huang.sm",tbl:"lakehouse.sap_fi.ap_invoice",cols:["invoice_no","amount"],rows:{company_code:["US01"]},exp:"90 天",why:"跨 BU 專案",st:"已退回",note:"請改走 PMO 報表"}];
 let seq=1043;
+// 以角色 / 組織代碼為來源的授權（範例資料）
+const SRC={
+ "A4:IT-DataPlatform":{type:"A4 2.0 角色",name:"IT Role · IT-DataPlatform",purpose:"Data Platform 維運：資料品質檢核與 pipeline 除錯",approver:"wang.jh 王建宏（財務 Data Owner）",granted:"2026-05-12",until:"2026-11-10",
+  grants:[{tbl:"lakehouse.sap_fi.ap_invoice",cols:["invoice_no","vendor_id","company_code","plant","amount","bank_account","posting_date"],unmask:["amount"],rows:{company_code:["TW01","TW02"]}},
+          {tbl:"warehouse.scm.purchase_order",cols:["po_no","vendor_id","material","qty","unit_price","org_code"],unmask:[],rows:{org_code:["PUR-TW"]}}]},
+ "AD:00123456":{type:"AD 組織代碼",name:"00123456（資訊處 · 資料平台部）",purpose:"部門報表：客戶與財務營運儀表板",approver:"wu.ph 吳佩華（客戶 Data Owner）",granted:"2026-01-05",until:"2027-06-30",
+  grants:[{tbl:"mart.crm.customer",cols:["customer_id","customer_name","region","contact_email","credit_limit"],unmask:["credit_limit"],rows:{region:["APAC"]}},
+          {tbl:"lakehouse.sap_fi.ap_invoice",cols:["invoice_no","vendor_name","company_code","amount","posting_date"],unmask:[],rows:{company_code:["TW01"],plant:["F12"]}}]}};
+function sourcesFor(id){const u=ROLES[id]||{a4:[],ad:[]},out=[];
+ u.a4.forEach(r=>SRC['A4:'+r]&&out.push(SRC['A4:'+r]));u.ad.forEach(o=>SRC['AD:'+o]&&out.push(SRC['AD:'+o]));
+ REQ.filter(r=>r.user==id&&r.st=='已核准').forEach(r=>out.push({type:"個人申請",name:r.id,purpose:r.why,approver:TABLES[r.tbl].owner,granted:"—",until:r.until,grants:[{tbl:r.tbl,cols:r.cols,unmask:r.unmask||[],rows:r.rows}]}));return out}
+const daysLeft=d=>Math.ceil((new Date(d)-new Date(new Date().toISOString().slice(0,10)))/864e5);
+const maskedOf=g=>TABLES[g.tbl].cols.filter(c=>c[1]&&g.cols.includes(c[0])&&!g.unmask.includes(c[0])).map(c=>c[0]);
+const colState=(g,c)=>!g.cols.includes(c)?'none':maskedOf(g).includes(c)?'mask':'clear';
+const pillOf=x=>x=='clear'?'<span class="pill ok">可見</span>':x=='mask'?'<span class="pill wa">遮罩</span>':'<span class="pill da">無權限</span>';
+const plainRows=r=>Object.entries(r).map(([k,v])=>`${k} 為 ${v.join('、')}`).join('，且 ');
 const $=s=>document.querySelector(s);
 document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{document.querySelectorAll('nav button,.tab').forEach(e=>e.classList.remove('on'));b.classList.add('on');$('#'+b.dataset.t).classList.add('on');render()});
 const st=s=>`<span class="pill ${s=='已核准'?'ok':s=='待簽核'?'wa':'da'}">${s}</span>`;
@@ -98,24 +115,58 @@ function decide(id,ok){const r=REQ.find(x=>x.id==id),t=TABLES[r.tbl];if(!ok){r.s
  const d=new Date();d.setDate(d.getDate()+parseInt(r.exp=='1 年'?365:r.exp));r.until=d.toISOString().slice(0,10);r.st='已核准';render()}
 function bundle(){const g={};REQ.filter(r=>r.st=='已核准').forEach(r=>{const t=TABLES[r.tbl];(g[r.user]=g[r.user]||[]).push({table:r.tbl,columns:r.cols,
  masked_columns:t.cols.filter(c=>c[1]&&r.cols.includes(c[0])&&!r.unmask.includes(c[0])).map(c=>c[0]),row_filter:r.rows,expires_at:r.until,grant_id:r.id})});
- return {"_comment":"範例資料，由 Portal 產生","grants_by_user":g,"org_rules":{"FIN-TW-*":{"table":"lakehouse.sap_fi.ap_invoice","row_filter":{"company_code":["TW01","TW02"]}}},
+ const conv=(k,v)=>({source:k,purpose:v.purpose,approver:v.approver,granted_at:v.granted,expires_at:v.until,grants:v.grants.map(x=>({table:x.tbl,columns:x.cols,masked_columns:maskedOf(x),row_filter:x.rows}))});
+ const byRole={},byOrg={};Object.entries(SRC).forEach(([k,v])=>{const [t,n]=k.split(':');(t=='A4'?byRole:byOrg)[n]=conv(k,v)});
+ return {"_comment":"範例資料，由 Portal 產生","grants_by_user":g,"grants_by_a4_role":byRole,"grants_by_ad_org":byOrg,"user_attributes":Object.fromEntries(Object.entries(ROLES).map(([k,u])=>[k,{a4_roles:u.a4,ad_org_codes:u.ad}])),
  "mask_expr":{"amount":"CAST(NULL AS DECIMAL(18,2))","bank_account":"'****' || substr(bank_account,-4)","contact_email":"regexp_replace(contact_email,'^[^@]+','***')","credit_limit":"NULL","tax_id":"'********'","unit_price":"NULL"}}}
-function lookup(){const id=$('#lUser').value.trim(),u=ROLES[id];if(!u){$('#lOut').innerHTML='<div class="card">查無此帳號（範例僅含 chen.wl / lin.yc / huang.sm）</div>';return}
- const gs=REQ.filter(r=>r.user==id&&r.st=='已核准');
- $('#lOut').innerHTML=`<div class="card"><h2>${id} ${u.name}</h2><div class="row"><span class="pill ac">組織 ${u.org}</span>${u.a4.map(a=>`<span class="pill">A4：${a}</span>`).join('')}${u.ad.map(a=>`<span class="pill">AD：${a}</span>`).join('')}</div></div>`+
- (gs.length?gs.map(r=>{const t=TABLES[r.tbl],mk=t.cols.filter(c=>c[1]&&r.cols.includes(c[0])&&!r.unmask.includes(c[0])).map(c=>c[0]);return `<div class="card"><div class="row" style="justify-content:space-between"><b>${r.tbl}</b><span class="muted">${r.id} · 有效至 ${r.until}</span></div>
- <div class="plain">你可以查詢 <b>${r.tbl.split('.').pop()}</b>，但只會看到 <b>${Object.entries(r.rows).map(([k,v])=>`${k} 為 ${v.join('、')}`).join('，且 ')}</b> 的資料。${mk.length?` 欄位 <b>${mk.join('、')}</b> 會被遮罩。`:''}</div>
- <table><tr><th>欄位</th><th>狀態</th></tr>${t.cols.map(([c])=>`<tr><td>${c}</td><td>${!r.cols.includes(c)?'<span class="pill da">無權限</span>':mk.includes(c)?'<span class="pill wa">遮罩</span>':'<span class="pill ok">可見</span>'}</td></tr>`).join('')}</table></div>`}).join(''):'<div class="card muted">目前沒有已核准的權限。</div>')}
+function lookup(){const id=$('#lUser').value.trim(),u=ROLES[id];if(!u){$('#lOut').innerHTML='<div class="card">查無此帳號（範例僅含 thlin / chen.wl / lin.yc / huang.sm）</div>';return}
+ const srcs=sourcesFor(id);let h=`<div class="card"><h2>${id} ${u.name}</h2><div class="row"><span class="pill ac">組織 ${u.org}</span>${u.a4.map(a=>`<span class="pill">A4：${a}</span>`).join('')}${u.ad.map(a=>`<span class="pill">AD：${a}</span>`).join('')}</div><p class="muted">以下皆為範例資料。權限依來源分組，最後為合併後的有效權限（聯集）。</p></div>`;
+ if(!srcs.length){$('#lOut').innerHTML=h+'<div class="card muted">目前沒有已核准的權限。</div>';return}
+ h+=srcs.map(s=>{const dl=daysLeft(s.until);return `<div class="card"><div class="row" style="justify-content:space-between"><div class="row"><span class="pill ac">${s.type}</span><b>${s.name}</b></div>${dl<0?'<span class="pill da">已過期</span>':dl<30?`<span class="pill da">⚠ 即將到期</span>`:'<span class="pill ok">有效</span>'}</div>
+ <table style="margin:8px 0"><tr><th>申請目的</th><td>${s.purpose}</td><th>核准人（Data Owner）</th><td>${s.approver}</td></tr><tr><th>授權日期</th><td>${s.granted}</td><th>有效期限</th><td>${s.until}（剩 ${dl} 天）</td></tr></table>
+ ${s.grants.map(g=>{const t=TABLES[g.tbl];return `<h3>${g.tbl}</h3><div class="plain">只會看到 <b>${plainRows(g.rows)}</b> 的資料。${maskedOf(g).length?` 欄位 <b>${maskedOf(g).join('、')}</b> 會被遮罩。`:''}</div>
+ <table><tr><th>欄位</th><th>狀態</th></tr>${t.cols.map(([c])=>`<tr><td>${c}</td><td>${pillOf(colState(g,c))}</td></tr>`).join('')}</table>`}).join('')}</div>`}).join('');
+ // 合併有效權限
+ const tbls=[...new Set(srcs.flatMap(s=>s.grants.map(g=>g.tbl)))];
+ h+=`<div class="card"><h2>合併後的有效權限（聯集）</h2><p class="muted">欄位：任一來源可見即可見；僅有遮罩來源則遮罩。Row：各來源條件以 OR 合併，每個來源只作用在自己授權的欄位範圍內。</p>`+tbls.map(tb=>{const gs=srcs.flatMap(s=>s.grants.filter(g=>g.tbl==tb).map(g=>({s,g})));
+  const rowsH=gs.map(({s,g})=>`<li>${plainRows(g.rows)} <span class="muted">← ${s.type} ${s.name}</span></li>`).join('');
+  return `<h3>${tb}${gs.length>1?' <span class="pill wa">多個來源重疊</span>':''}</h3><table><tr><th>欄位</th><th>有效狀態</th><th>授權來源</th></tr>${TABLES[tb].cols.map(([c])=>{const st=gs.map(({s,g})=>({s,x:colState(g,c)})).filter(o=>o.x!='none');
+   const eff=st.some(o=>o.x=='clear')?'clear':st.length?'mask':'none';
+   return `<tr><td>${c}</td><td>${pillOf(eff)}${st.length>1?' <span class="pill">重疊</span>':''}</td><td class="muted">${st.map(o=>`${o.s.type} ${o.s.name}（${o.x=='clear'?'可見':'遮罩'}）`).join('<br>')||'—'}</td></tr>`}).join('')}</table><div class="muted" style="margin-top:6px">Row 範圍（OR）：</div><ul style="margin:4px 0;font-size:14px">${rowsH}</ul>`}).join('')+'</div>';
+ $('#lOut').innerHTML=h}
 $('#pRego').textContent=`package trino
 
 import rego.v1
 default allow := false
 
+valid(exp) if time.parse_ns("2006-01-02", exp) > time.now_ns()
+
+# 來源 1：個人申請
 grant(user, tbl) := g if {
   some g in data.grants_by_user[user]
   g.table == tbl
-  time.parse_ns("2006-01-02", g.expires_at) > time.now_ns()
+  valid(g.expires_at)
 }
+
+# 來源 2：A4 2.0 角色（如 IT-DataPlatform）
+grant(user, tbl) := g if {
+  some r in data.user_attributes[user].a4_roles
+  src := data.grants_by_a4_role[r]
+  valid(src.expires_at)
+  some g in src.grants
+  g.table == tbl
+}
+
+# 來源 3：AD 組織代碼（如 00123456）
+grant(user, tbl) := g if {
+  some o in data.user_attributes[user].ad_org_codes
+  src := data.grants_by_ad_org[o]
+  valid(src.expires_at)
+  some g in src.grants
+  g.table == tbl
+}
+# 註：實作上應改為 set（grants contains g），多來源時取聯集：
+# 欄位可見 = 任一來源未遮罩；Row Filter 以 OR 合併各來源條件。
 
 fqn(r) := concat(".", [r.catalogName, r.schemaName, r.tableName])
 
@@ -142,5 +193,5 @@ batchColumnMasks contains {"index": i, "viewExpression": {"expression": data.mas
              concat(".", [c.column.catalogName, c.column.schemaName, c.column.tableName]))
   c.column.columnName in g.masked_columns
 }`;
-initApply();render();lookup();
+initApply();render();lookup();if(location.hash.length>1){const b=document.querySelector('nav button[data-t="'+location.hash.slice(1)+'"]');b&&b.click()}
 </script></body></html>
